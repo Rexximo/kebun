@@ -54,6 +54,7 @@
 <script>
 const BASE = "ta-sawimentimun-9x7k";   // HARUS sama dengan di ESP32
 const $ = id => document.getElementById(id);
+let lastData = 0;
 
 const chart = new Chart($('chart'), {
   type:'line',
@@ -64,17 +65,19 @@ const chart = new Chart($('chart'), {
   options:{animation:false,scales:{y:{beginAtZero:true}}}
 });
 
-const client = mqtt.connect("wss://broker.hivemq.com:8884/mqtt", {clientId:"web-"+Math.random().toString(16).slice(2)});
+const client = mqtt.connect("wss://broker.hivemq.com:8884/mqtt", {
+  clientId: "web-" + Math.random().toString(16).slice(2),
+  keepalive: 30,
+  reconnectPeriod: 2000
+});
 client.on('connect', () => client.subscribe([BASE+"/data", BASE+"/status"]));
 
 client.on('message', (t, m) => {
-  const msg = m.toString();
-  if (t.endsWith("/status")) {
-    $('dev').textContent = msg;
-    $('dev').className = "badge " + (msg==="online" ? "on" : "bad");
-    return;
-  }
-  const d = JSON.parse(msg);
+  if (t.endsWith("/status")) return;   // status ditentukan dari data yang masuk
+  let d;
+  try { d = JSON.parse(m.toString()); } catch (e) { return; }
+  lastData = Date.now();
+
   $('soil1').textContent = d.soil1; $('soil2').textContent = d.soil2;
   $('suhu').textContent = d.suhu.toFixed(1); $('lembap').textContent = d.lembap.toFixed(0);
   $('cahaya').textContent = d.cahaya; $('rssi').textContent = d.rssi;
@@ -95,6 +98,13 @@ client.on('message', (t, m) => {
   if (chart.data.labels.length > 40) { chart.data.labels.shift(); chart.data.datasets.forEach(s=>s.data.shift()); }
   chart.update();
 });
+
+// Online jika ada data masuk dalam 15 detik terakhir
+setInterval(() => {
+  const on = Date.now() - lastData < 15000;
+  $('dev').textContent = on ? "online" : "offline";
+  $('dev').className = "badge " + (on ? "on" : "bad");
+}, 2000);
 
 function send(sub, val){ client.publish(BASE+"/cmd/"+sub, String(val)); }
 </script>

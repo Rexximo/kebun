@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monitoring Sawi & Mentimun</title>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  body{font-family:system-ui,sans-serif;background:#f1f5f0;margin:0;padding:16px;color:#1b2b1b}
+  h1{font-size:1.3rem;margin:0 0 4px} .sub{color:#667;font-size:.85rem;margin-bottom:14px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px}
+  .card{background:#fff;border-radius:12px;padding:14px;box-shadow:0 1px 3px #0001}
+  .card h3{margin:0;font-size:.8rem;color:#667;font-weight:600}
+  .val{font-size:1.8rem;font-weight:700;margin-top:4px}
+  .badge{display:inline-block;padding:2px 10px;border-radius:99px;font-size:.75rem;font-weight:600}
+  .on{background:#d6f5d6;color:#176b17}.off{background:#e6e6e6;color:#555}.bad{background:#fbd5d5;color:#8a1c1c}
+  button{border:0;border-radius:8px;padding:8px 14px;font-weight:600;cursor:pointer;background:#2f7d32;color:#fff;margin:4px 4px 0 0}
+  button.sec{background:#546e7a} button:disabled{opacity:.4;cursor:not-allowed}
+  input[type=range]{width:100%}
+  .panel{background:#fff;border-radius:12px;padding:14px;box-shadow:0 1px 3px #0001;margin-bottom:14px}
+</style>
+</head>
+<body>
+<h1>🌱 Monitoring & Penyiraman Otomatis</h1>
+<div class="sub">Sawi & Mentimun — ESP32 + MQTT &nbsp;|&nbsp; Perangkat: <span id="dev" class="badge off">offline</span>
+&nbsp; Update: <span id="ts">-</span> &nbsp; RSSI: <span id="rssi">-</span> dBm</div>
+
+<div class="grid">
+  <div class="card"><h3>Kelembapan Tanah Sawi</h3><div class="val"><span id="soil1">-</span>%</div><span id="p1" class="badge off">Pompa OFF</span></div>
+  <div class="card"><h3>Kelembapan Tanah Mentimun</h3><div class="val"><span id="soil2">-</span>%</div><span id="p2" class="badge off">Pompa OFF</span></div>
+  <div class="card"><h3>Suhu Udara</h3><div class="val"><span id="suhu">-</span>°C</div></div>
+  <div class="card"><h3>Kelembapan Udara</h3><div class="val"><span id="lembap">-</span>%</div></div>
+  <div class="card"><h3>Intensitas Cahaya</h3><div class="val"><span id="cahaya">-</span>%</div></div>
+</div>
+
+<div class="panel">
+  <h3 style="margin-top:0">Kontrol</h3>
+  Mode saat ini: <b id="mode">-</b><br>
+  <button onclick="send('mode','auto')">AUTO</button>
+  <button class="sec" onclick="send('mode','manual')">MANUAL</button>
+  <hr>
+  Sawi: <button class="m" onclick="send('pump1','1')">ON</button><button class="m sec" onclick="send('pump1','0')">OFF</button><br>
+  Mentimun: <button class="m" onclick="send('pump2','1')">ON</button><button class="m sec" onclick="send('pump2','0')">OFF</button>
+  <hr>
+  Ambang batas sawi (pompa ON jika &lt;): <b id="th1v">55</b>%
+  <input type="range" id="th1" min="10" max="90" value="55" onchange="send('th1',this.value)" oninput="th1v.textContent=this.value">
+  Ambang batas mentimun: <b id="th2v">50</b>%
+  <input type="range" id="th2" min="10" max="90" value="50" onchange="send('th2',this.value)" oninput="th2v.textContent=this.value">
+</div>
+
+<div class="panel"><canvas id="chart" height="110"></canvas></div>
+
+<script>
+const BASE = "ta-sawimentimun-9x7k";   // HARUS sama dengan di ESP32
+const $ = id => document.getElementById(id);
+
+const chart = new Chart($('chart'), {
+  type:'line',
+  data:{labels:[],datasets:[
+    {label:'Tanah Sawi (%)',data:[],borderColor:'#2e7d32',tension:.3},
+    {label:'Tanah Mentimun (%)',data:[],borderColor:'#f9a825',tension:.3},
+    {label:'Suhu (°C)',data:[],borderColor:'#d84315',tension:.3}]},
+  options:{animation:false,scales:{y:{beginAtZero:true}}}
+});
+
+const client = mqtt.connect("wss://broker.hivemq.com:8884/mqtt", {clientId:"web-"+Math.random().toString(16).slice(2)});
+client.on('connect', () => client.subscribe([BASE+"/data", BASE+"/status"]));
+
+client.on('message', (t, m) => {
+  const msg = m.toString();
+  if (t.endsWith("/status")) {
+    $('dev').textContent = msg;
+    $('dev').className = "badge " + (msg==="online" ? "on" : "bad");
+    return;
+  }
+  const d = JSON.parse(msg);
+  $('soil1').textContent = d.soil1; $('soil2').textContent = d.soil2;
+  $('suhu').textContent = d.suhu.toFixed(1); $('lembap').textContent = d.lembap.toFixed(0);
+  $('cahaya').textContent = d.cahaya; $('rssi').textContent = d.rssi;
+  $('mode').textContent = d.mode.toUpperCase();
+  $('ts').textContent = new Date().toLocaleTimeString('id-ID');
+  [['p1',d.pump1],['p2',d.pump2]].forEach(([id,on])=>{
+    $(id).textContent = on ? "Pompa ON" : "Pompa OFF";
+    $(id).className = "badge " + (on ? "on" : "off");
+  });
+  document.querySelectorAll('button.m').forEach(b => b.disabled = d.mode==="auto");
+  $('th1').value=d.th1; $('th1v').textContent=d.th1;
+  $('th2').value=d.th2; $('th2v').textContent=d.th2;
+
+  chart.data.labels.push(new Date().toLocaleTimeString('id-ID'));
+  chart.data.datasets[0].data.push(d.soil1);
+  chart.data.datasets[1].data.push(d.soil2);
+  chart.data.datasets[2].data.push(d.suhu);
+  if (chart.data.labels.length > 40) { chart.data.labels.shift(); chart.data.datasets.forEach(s=>s.data.shift()); }
+  chart.update();
+});
+
+function send(sub, val){ client.publish(BASE+"/cmd/"+sub, String(val)); }
+</script>
+</body>
+</html>
